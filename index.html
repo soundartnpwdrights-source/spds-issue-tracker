@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SPDS District Issue Tracker</title>
+<meta name="robots" content="noindex,nofollow">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500&display=swap">
+<link rel="stylesheet" href="style.css">
+<style>
+html,body{margin:0}
+body{font-size:14px}
+.updated{font-size:12.5px;color:var(--muted)}
+.rep{grid-template-columns:86px 150px minmax(0,1fr)}
+@media (max-width:560px){.rep{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <div class="eyebrow">SPDS · District field reports</div>
+      <h1>District App Issue Tracker</h1>
+      <p class="sub">Application issues reported in the SPDS IT Support WhatsApp groups. Repeat reports of the same problem are grouped under one issue, so the count shows how widespread it is.</p>
+      <p class="updated" id="updated"></p>
+    </div>
+    <div class="actions">
+      <button class="btn" id="exportBtn" type="button">Download CSV</button>
+    </div>
+  </header>
+
+  <section class="stats" aria-label="Summary">
+    <div class="stat hot"><b id="sOpen">–</b><span id="sOpenL">Active issues</span></div>
+    <div class="stat"><b id="sWeek">–</b><span id="sWeekL">Reports in last 7 days</span></div>
+    <div class="stat"><b id="sDist">–</b><span>Districts with active issues</span></div>
+    <div class="stat"><b id="sRes">–</b><span>Resolved / closed</span></div>
+  </section>
+
+  <div class="toolbar">
+    <input type="search" id="q" placeholder="Search issues, messages, names" aria-label="Search">
+    <div class="seg" role="group" aria-label="Status filter" id="statusSeg">
+      <button type="button" data-s="active" aria-pressed="true">Active</button>
+      <button type="button" data-s="Resolved">Resolved</button>
+      <button type="button" data-s="all">All</button>
+    </div>
+    <select id="catF" aria-label="Category"><option value="">All categories</option></select>
+    <select id="distF" aria-label="District"><option value="">All districts</option></select>
+  </div>
+
+  <section class="panel datebar" aria-label="Date filter">
+    <div class="datebar-top">
+      <div class="seg" role="group" aria-label="Date presets" id="presets">
+        <button type="button" data-p="all" aria-pressed="true">All dates</button>
+        <button type="button" data-p="today" aria-pressed="false">Today</button>
+        <button type="button" data-p="yesterday" aria-pressed="false">Yesterday</button>
+        <button type="button" data-p="7" aria-pressed="false">Last 7 days</button>
+        <button type="button" data-p="30" aria-pressed="false">Last 30 days</button>
+      </div>
+      <div class="dates">
+        <label class="dlab" for="dFrom">From</label><input class="field" type="date" id="dFrom">
+        <label class="dlab" for="dTo">To</label><input class="field" type="date" id="dTo">
+      </div>
+      <span class="range-note" id="rangeNote" aria-live="polite"></span>
+    </div>
+    <div class="days" id="days" role="group" aria-label="Reports per day"></div>
+    <div class="days-help">Reports per day. Tap a day to see only that day's issues; tap it again to clear.</div>
+  </section>
+
+  <div class="grid">
+    <section class="panel">
+      <h2 id="listHead">Issues by number of reports</h2>
+      <div class="list" id="list"><div class="empty"><strong>Loading…</strong></div></div>
+    </section>
+    <aside class="panel">
+      <h2>Active reports by district</h2>
+      <div class="dist-list" id="dists"></div>
+      <div class="note">Tap a district to filter the issue list.</div>
+    </aside>
+  </div>
+</div>
+
+<script>
+const DISTRICTS=["Ariyalur","Chengalpattu","Chennai","Coimbatore","Cuddalore","Dharmapuri","Dindigul","Erode","Kallakurichi","Kancheepuram","Kanniyakumari","Karur","Krishnagiri","Madurai","Mayiladuthurai","Nagapattinam","Namakkal","Nilgiris","Perambalur","Pudukkottai","Ramanathapuram","Ranipet","Salem","Sivaganga","Tenkasi","Thanjavur","Theni","Thoothukudi","Tiruchirappalli","Tirunelveli","Tirupathur","Tiruppur","Tiruvallur","Tiruvannamalai","Tiruvarur","Vellore","Villupuram","Virudhunagar"];
+const ACTIVE=new Set(["Open","In progress","Escalated"]);
+const SEV={Critical:0,High:1,Medium:2,Low:3};
+const S={issues:[],reports:[],q:"",status:"active",cat:"",dist:"",open:null,from:"",to:"",preset:"all"};
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const isoDay=d=>{const x=new Date(d.getTime()-d.getTimezoneOffset()*6e4);return x.toISOString().slice(0,10)};
+const today=()=>isoDay(new Date());
+const addDays=(s,n)=>{const d=new Date(s+"T00:00:00");d.setDate(d.getDate()+n);return isoDay(d)};
+const fmt=d=>{if(!d)return"—";const t=new Date(d+"T00:00:00");return isNaN(t)?d:t.toLocaleDateString("en-IN",{day:"numeric",month:"short"})};
+const fmtLong=d=>{const t=new Date(d+"T00:00:00");return isNaN(t)?d:t.toLocaleDateString("en-IN",{day:"numeric",month:"short",year:"numeric"})};
+const code=i=>"ISS-"+String(i.num||0).padStart(3,"0");
+const ranged=()=>!!(S.from||S.to);
+const inRange=d=>(!S.from||(d||"")>=S.from)&&(!S.to||(d||"")<=S.to);
+function rangeLabel(){if(!ranged())return "All dates";if(S.from&&S.from===S.to)return fmtLong(S.from);return `${S.from?fmtLong(S.from):"Start"} – ${S.to?fmtLong(S.to):"today"}`}
+
+function enrich(){
+  const by={},tot={};for(const r of S.reports){tot[r.issueId]=(tot[r.issueId]||0)+1;if(!inRange(r.date))continue;(by[r.issueId]??=[]).push(r)}
+  return S.issues.map(i=>{const reps=(by[i.id]||[]).slice().sort((a,b)=>(b.date||"").localeCompare(a.date||""));
+    const ds=[...new Set(reps.map(r=>r.district).filter(Boolean))].sort();
+    return {...i,reps,ds,count:reps.length,total:tot[i.id]||0,first:reps.length?reps[reps.length-1].date:"",last:reps.length?reps[0].date:""}});
+}
+
+function renderDays(){
+  const cat=new Map(S.issues.map(i=>[i.id,i.category]));
+  const rs=S.reports.filter(r=>r.date&&(!S.dist||r.district===S.dist)&&(!S.cat||cat.get(r.issueId)===S.cat));
+  const dates=S.reports.map(r=>r.date).filter(Boolean).sort();
+  const box=$("days");
+  if(!dates.length){box.innerHTML=`<div class="days-empty">No reports yet.</div>`;return}
+  const end=[dates[dates.length-1],today()].sort()[1];let start=dates[0];if(start<addDays(end,-30))start=addDays(end,-30);
+  const cnt={};for(const r of rs)cnt[r.date]=(cnt[r.date]||0)+1;
+  const days=[];for(let d=start;d<=end;d=addDays(d,1))days.push(d);
+  const max=Math.max(1,...days.map(d=>cnt[d]||0));
+  box.innerHTML=days.map(d=>{const n=cnt[d]||0,sel=ranged()&&inRange(d),t=new Date(d+"T00:00:00");
+    return `<button type="button" class="day${sel?" sel":""}${n?"":" zero"}" data-day="${d}" aria-pressed="${S.from===d&&S.to===d}" title="${fmtLong(d)}: ${n} report${n===1?"":"s"}"><span class="dv">${n||""}</span><span class="db"><i style="height:${n?Math.max(6,n/max*100):0}%"></i></span><span class="dl">${t.getDate()}</span><span class="dm">${t.getDate()===1||d===start?t.toLocaleDateString("en-IN",{month:"short"}):"&nbsp;"}</span></button>`}).join("");
+  const inSel=S.reports.filter(r=>inRange(r.date)).length;
+  $("rangeNote").textContent=ranged()?`${rangeLabel()} · ${inSel} report${inSel===1?"":"s"}`:`All dates · ${S.reports.length} reports`;
+  $("dFrom").value=S.from;$("dTo").value=S.to;
+  [...$("presets").children].forEach(b=>b.setAttribute("aria-pressed",b.dataset.p===S.preset));
+  if(!renderDays.done){box.scrollLeft=box.scrollWidth;renderDays.done=true}
+}
+
+function render(){
+  const all=enrich();
+  const active=all.filter(i=>ACTIVE.has(i.status));
+  const wk=addDays(today(),-7);
+  $("sOpen").textContent=(ranged()?active.filter(i=>i.count):active).length;
+  $("sOpenL").textContent=ranged()?"Active issues reported in these dates":"Active issues";
+  $("sWeek").textContent=ranged()?S.reports.filter(r=>inRange(r.date)).length:S.reports.filter(r=>(r.date||"")>=wk).length;
+  $("sWeekL").textContent=ranged()?"Reports in selected dates":"Reports in last 7 days";
+  $("sDist").textContent=new Set(active.flatMap(i=>i.ds)).size;
+  $("sRes").textContent=all.filter(i=>i.status==="Resolved"||i.status==="Closed").length;
+  renderDays();
+  const q=S.q.toLowerCase();
+  let rows=all.filter(i=>{
+    if(i.status==="Merged")return false;
+    if(S.status==="active"&&!ACTIVE.has(i.status))return false;
+    if(S.status==="Resolved"&&!(i.status==="Resolved"||i.status==="Closed"))return false;
+    if(S.cat&&i.category!==S.cat)return false;
+    if(S.dist&&!i.ds.includes(S.dist))return false;
+    if(ranged()&&!i.count)return false;
+    if(q){const hay=[code(i),i.title,i.category,i.owner,i.resolution,...i.reps.map(r=>[r.message,r.reportedBy,r.district].join(" "))].join(" ").toLowerCase();if(!hay.includes(q))return false}
+    return true});
+  rows.sort((a,b)=>(ACTIVE.has(b.status)-ACTIVE.has(a.status))||(b.count-a.count)||(SEV[a.severity]??9)-(SEV[b.severity]??9)||(b.last||"").localeCompare(a.last||""));
+  $("listHead").textContent=`Issues by number of reports · ${rows.length}`+(S.dist?` in ${S.dist}`:"")+(ranged()?` · ${rangeLabel()}`:"");
+  $("list").innerHTML=rows.length?rows.map(rowHTML).join(""):`<div class="empty"><strong>No issues match these filters</strong><span>${ranged()?"No reports in the selected dates. Pick another day or choose “All dates”.":"Clear the search or switch to “All”."}</span></div>`;
+  const dc={};for(const i of active)for(const r of i.reps)dc[r.district]=(dc[r.district]||0)+1;
+  const dl=Object.entries(dc).sort((a,b)=>b[1]-a[1]);const max=dl[0]?.[1]||1;
+  $("dists").innerHTML=dl.length?dl.map(([d,n])=>`<button type="button" class="drow" data-dist="${esc(d)}" aria-pressed="${S.dist===d}"><span class="n">${esc(d)}</span><span class="bar"><i style="width:${Math.max(4,n/max*100)}%"></i></span><span class="v">${n}</span></button>`).join(""):`<div class="empty" style="padding:20px"><span>No active reports in these dates.</span></div>`;
+}
+
+function rowHTML(i){
+  const isOpen=S.open===i.id;
+  const dtxt=i.ds.length?(i.ds.length<=3?i.ds.join(", "):`${i.ds.slice(0,3).join(", ")} +${i.ds.length-3}`):"No district yet";
+  let h=`<div class="row${isOpen?" open":""}" data-id="${esc(i.id)}" tabindex="0" role="button" aria-expanded="${isOpen}">
+    <span class="stripe ${esc(i.severity)}" title="${esc(i.severity)} severity"></span>
+    <div class="row-main"><div class="row-top"><span class="code">${code(i)}</span><span class="title">${esc(i.title)}</span></div>
+      <div class="meta"><span class="pill ${esc((i.status||"").replace(" ","-"))}">${esc(i.status)}</span>${i.category?`<span class="tag">${esc(i.category)}</span>`:""}<span>${esc(dtxt)}</span><span>Last ${fmt(i.last)}</span>${i.owner?`<span>Owner: ${esc(i.owner)}</span>`:""}</div></div>
+    <div class="count"><b>${i.count}</b><span>${i.count===1?"report":"reports"} · ${i.ds.length} dist.</span></div></div>`;
+  if(isOpen)h+=`<div class="detail">
+    <div class="detail-grid">
+      <div><div class="dlab">Status</div>${esc(i.status)}</div><div><div class="dlab">Severity</div>${esc(i.severity)}</div>
+      <div><div class="dlab">Category</div>${esc(i.category||"—")}</div><div><div class="dlab">Owner</div>${esc(i.owner||"—")}</div>
+    </div>
+    ${i.resolution?`<div><div class="dlab">Action taken / resolution</div><div style="white-space:pre-wrap">${esc(i.resolution)}</div></div>`:""}
+    <div><div style="font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:8px">${i.count} ${i.count===1?"report":"reports"} from ${i.ds.length} ${i.ds.length===1?"district":"districts"} · first ${fmt(i.first)}${ranged()&&i.total>i.count?` · ${i.total-i.count} more outside the selected dates`:""}</div>
+    <div class="reports">${i.reps.map(r=>`<div class="rep"><span class="d">${fmt(r.date)}</span><span class="dist">${esc(r.district)}<span class="who">${esc(r.reportedBy||"")}</span></span><span class="msg">${esc(r.message)}</span></div>`).join("")}</div></div>
+  </div>`;
+  return h;
+}
+
+$("distF").innerHTML+=DISTRICTS.map(d=>`<option>${d}</option>`).join("");
+$("q").addEventListener("input",e=>{S.q=e.target.value;render()});
+$("catF").addEventListener("change",e=>{S.cat=e.target.value;render()});
+$("distF").addEventListener("change",e=>{S.dist=e.target.value;render()});
+$("statusSeg").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;S.status=b.dataset.s;[...$("statusSeg").children].forEach(x=>x.setAttribute("aria-pressed",x===b));render()});
+$("dists").addEventListener("click",e=>{const b=e.target.closest(".drow");if(!b)return;S.dist=S.dist===b.dataset.dist?"":b.dataset.dist;$("distF").value=S.dist;render()});
+$("list").addEventListener("click",e=>{if(e.target.closest(".detail"))return;const r=e.target.closest(".row");if(!r)return;S.open=S.open===r.dataset.id?null:r.dataset.id;render()});
+$("list").addEventListener("keydown",e=>{if((e.key==="Enter"||e.key===" ")&&e.target.classList.contains("row")){e.preventDefault();e.target.click()}});
+function setRange(from,to,preset){S.from=from||"";S.to=to||"";if(S.from&&S.to&&S.from>S.to){const t=S.from;S.from=S.to;S.to=t}S.preset=preset||(S.from||S.to?"custom":"all");S.open=null;render()}
+$("presets").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;const t=today(),p=b.dataset.p;
+  if(p==="all")setRange("","","all");else if(p==="today")setRange(t,t,p);else if(p==="yesterday"){const y=addDays(t,-1);setRange(y,y,p)}else setRange(addDays(t,-(+p-1)),t,p)});
+$("dFrom").addEventListener("change",e=>setRange(e.target.value,S.to));
+$("dTo").addEventListener("change",e=>setRange(S.from,e.target.value));
+$("days").addEventListener("click",e=>{const b=e.target.closest(".day");if(!b||b.classList.contains("zero"))return;const d=b.dataset.day;if(S.from===d&&S.to===d)setRange("","","all");else setRange(d,d,"day")});
+$("exportBtn").addEventListener("click",()=>{
+  const q=v=>`"${String(v??"").replace(/"/g,'""')}"`;
+  const rows=[["Code","Issue","Category","Severity","Status","Owner","Reports","Districts affected","District names","First reported","Last reported","Action / resolution"]];
+  for(const i of enrich().filter(i=>i.status!=="Merged"&&(!ranged()||i.count)).sort((a,b)=>b.count-a.count))rows.push([code(i),i.title,i.category,i.severity,i.status,i.owner,i.count,i.ds.length,i.ds.join("; "),i.first,i.last,i.resolution]);
+  const blob=new Blob(["﻿"+rows.map(r=>r.map(q).join(",")).join("\r\n")],{type:"text/csv"});
+  const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=`spds-issues-${ranged()?(S.from||"start")+"_to_"+(S.to||today()):today()}.csv`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),2000);
+});
+
+fetch("data.json?v="+Date.now()).then(r=>{if(!r.ok)throw new Error(r.status);return r.json()}).then(d=>{
+  S.issues=d.issues||[];S.reports=d.reports||[];
+  const cs=[...new Set(S.issues.map(i=>i.category).filter(Boolean))].sort();
+  $("catF").innerHTML='<option value="">All categories</option>'+cs.map(c=>`<option>${esc(c)}</option>`).join("");
+  if(d.updated){const t=new Date(d.updated);$("updated").textContent="Last updated "+t.toLocaleString("en-IN",{day:"numeric",month:"short",year:"numeric",hour:"numeric",minute:"2-digit"});}
+  render();
+}).catch(()=>{$("list").innerHTML='<div class="empty"><strong>Could not load the data</strong><span>Reload the page. If it keeps failing, the data file is missing from the site.</span></div>'});
+</script>
+</body>
+</html>
