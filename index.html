@@ -14,6 +14,8 @@ body{font-size:14px}
 .updated{font-size:12.5px;color:var(--muted)}
 .rep{grid-template-columns:86px 150px minmax(0,1fr)}
 @media (max-width:560px){.rep{grid-template-columns:1fr}}
+.dname{font-weight:800;font-size:13px;padding:1px 8px;border-radius:4px;background:var(--accent-soft);color:var(--accent);white-space:nowrap}
+.shared{font-size:12.5px;color:var(--muted);margin:0 0 8px}
 </style>
 </head>
 <body>
@@ -22,7 +24,7 @@ body{font-size:14px}
     <div>
       <div class="eyebrow">SPDS · District field reports</div>
       <h1>District App Issue Tracker</h1>
-      <p class="sub">Application issues reported in the SPDS IT Support WhatsApp groups. Repeat reports of the same problem are grouped under one issue, so the count shows how widespread it is.</p>
+      <p class="sub">Application issues reported in the SPDS IT Support WhatsApp groups. “By district” lists each district's issues on their own rows; “Combined” adds up all districts per issue.</p>
       <p class="updated" id="updated"></p>
     </div>
     <div class="actions">
@@ -43,6 +45,10 @@ body{font-size:14px}
       <button type="button" data-s="active" aria-pressed="true">Active</button>
       <button type="button" data-s="Resolved">Resolved</button>
       <button type="button" data-s="all">All</button>
+    </div>
+    <div class="seg" role="group" aria-label="View" id="viewSeg">
+      <button type="button" data-v="district" aria-pressed="true">By district</button>
+      <button type="button" data-v="combined" aria-pressed="false">Combined</button>
     </div>
     <select id="catF" aria-label="Category"><option value="">All categories</option></select>
     <select id="distF" aria-label="District"><option value="">All districts</option></select>
@@ -84,7 +90,8 @@ body{font-size:14px}
 const DISTRICTS=["Ariyalur","Chengalpattu","Chennai","Coimbatore","Cuddalore","Dharmapuri","Dindigul","Erode","Kallakurichi","Kancheepuram","Kanniyakumari","Karur","Krishnagiri","Madurai","Mayiladuthurai","Nagapattinam","Namakkal","Nilgiris","Perambalur","Pudukkottai","Ramanathapuram","Ranipet","Salem","Sivaganga","Tenkasi","Thanjavur","Theni","Thoothukudi","Tiruchirappalli","Tirunelveli","Tirupathur","Tiruppur","Tiruvallur","Tiruvannamalai","Tiruvarur","Vellore","Villupuram","Virudhunagar"];
 const ACTIVE=new Set(["Open","In progress","Escalated"]);
 const SEV={Critical:0,High:1,Medium:2,Low:3};
-const S={issues:[],reports:[],q:"",status:"active",cat:"",dist:"",open:null,from:"",to:"",preset:"all"};
+const S={issues:[],reports:[],q:"",status:"active",cat:"",dist:"",open:null,from:"",to:"",preset:"all",view:"district"};
+try{const v=localStorage.getItem("view");if(v==="combined"||v==="district")S.view=v}catch{}
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const isoDay=d=>{const x=new Date(d.getTime()-d.getTimezoneOffset()*6e4);return x.toISOString().slice(0,10)};
@@ -103,6 +110,11 @@ function enrich(){
     const ds=[...new Set(reps.map(r=>r.district).filter(Boolean))].sort();
     return {...i,reps,ds,count:reps.length,total:tot[i.id]||0,first:reps.length?reps[reps.length-1].date:"",last:reps.length?reps[0].date:""}});
 }
+
+function splitByDistrict(i){const g={};for(const r of i.reps)(g[r.district||""]??=[]).push(r);
+  const ks=Object.keys(g);if(!ks.length)return ranged()?[]:[{...i,key:i.id+"|",dist:""}];
+  return ks.map(d=>{const reps=g[d];return {...i,reps,ds:d?[d]:[],count:reps.length,total:i.reps.length,first:reps[reps.length-1].date,last:reps[0].date,dist:d,key:i.id+"|"+d}})}
+const hayOf=i=>[code(i),i.title,i.category,i.owner,i.resolution,...i.reps.map(r=>[r.message,r.reportedBy,r.district].join(" "))].join(" ").toLowerCase();
 
 function renderDays(){
   const cat=new Map(S.issues.map(i=>[i.id,i.category]));
@@ -127,8 +139,9 @@ function render(){
   const all=enrich();
   const active=all.filter(i=>ACTIVE.has(i.status));
   const wk=addDays(today(),-7);
-  $("sOpen").textContent=(ranged()?active.filter(i=>i.count):active).length;
-  $("sOpenL").textContent=ranged()?"Active issues reported in these dates":"Active issues";
+  const dv=S.view==="district";
+  $("sOpen").textContent=dv?active.flatMap(splitByDistrict).filter(u=>u.count).length:(ranged()?active.filter(i=>i.count):active).length;
+  $("sOpenL").textContent=(dv?"Active district issues":"Active issues")+(ranged()?" in these dates":"");
   $("sWeek").textContent=ranged()?S.reports.filter(r=>inRange(r.date)).length:S.reports.filter(r=>(r.date||"")>=wk).length;
   $("sWeekL").textContent=ranged()?"Reports in selected dates":"Reports in last 7 days";
   $("sDist").textContent=new Set(active.flatMap(i=>i.ds)).size;
@@ -142,10 +155,11 @@ function render(){
     if(S.cat&&i.category!==S.cat)return false;
     if(S.dist&&!i.ds.includes(S.dist))return false;
     if(ranged()&&!i.count)return false;
-    if(q){const hay=[code(i),i.title,i.category,i.owner,i.resolution,...i.reps.map(r=>[r.message,r.reportedBy,r.district].join(" "))].join(" ").toLowerCase();if(!hay.includes(q))return false}
+    if(q&&!hayOf(i).includes(q))return false;
     return true});
+  if(dv)rows=rows.flatMap(splitByDistrict).filter(u=>(!S.dist||u.dist===S.dist)&&(!q||hayOf(u).includes(q)));
   rows.sort((a,b)=>(ACTIVE.has(b.status)-ACTIVE.has(a.status))||(b.count-a.count)||(SEV[a.severity]??9)-(SEV[b.severity]??9)||(b.last||"").localeCompare(a.last||""));
-  $("listHead").textContent=`Issues by number of reports · ${rows.length}`+(S.dist?` in ${S.dist}`:"")+(ranged()?` · ${rangeLabel()}`:"");
+  $("listHead").textContent=(dv?`Issues by district · ${rows.length}`:`Issues by number of reports · ${rows.length}`)+(S.dist?` in ${S.dist}`:"")+(ranged()?` · ${rangeLabel()}`:"");
   $("list").innerHTML=rows.length?rows.map(rowHTML).join(""):`<div class="empty"><strong>No issues match these filters</strong><span>${ranged()?"No reports in the selected dates. Pick another day or choose “All dates”.":"Clear the search or switch to “All”."}</span></div>`;
   const dc={};for(const i of active)for(const r of i.reps)dc[r.district]=(dc[r.district]||0)+1;
   const dl=Object.entries(dc).sort((a,b)=>b[1]-a[1]);const max=dl[0]?.[1]||1;
@@ -153,20 +167,21 @@ function render(){
 }
 
 function rowHTML(i){
-  const isOpen=S.open===i.id;
+  const k=i.key||i.id,dv=!!i.key,isOpen=S.open===k;
   const dtxt=i.ds.length?(i.ds.length<=3?i.ds.join(", "):`${i.ds.slice(0,3).join(", ")} +${i.ds.length-3}`):"No district yet";
-  let h=`<div class="row${isOpen?" open":""}" data-id="${esc(i.id)}" tabindex="0" role="button" aria-expanded="${isOpen}">
+  let h=`<div class="row${isOpen?" open":""}" data-id="${esc(k)}" tabindex="0" role="button" aria-expanded="${isOpen}">
     <span class="stripe ${esc(i.severity)}" title="${esc(i.severity)} severity"></span>
-    <div class="row-main"><div class="row-top"><span class="code">${code(i)}</span><span class="title">${esc(i.title)}</span></div>
-      <div class="meta"><span class="pill ${esc((i.status||"").replace(" ","-"))}">${esc(i.status)}</span>${i.category?`<span class="tag">${esc(i.category)}</span>`:""}<span>${esc(dtxt)}</span><span>Last ${fmt(i.last)}</span>${i.owner?`<span>Owner: ${esc(i.owner)}</span>`:""}</div></div>
-    <div class="count"><b>${i.count}</b><span>${i.count===1?"report":"reports"} · ${i.ds.length} dist.</span></div></div>`;
+    <div class="row-main"><div class="row-top">${dv?`<span class="dname">${esc(i.dist||"No district")}</span>`:""}<span class="code">${code(i)}</span><span class="title">${esc(i.title)}</span></div>
+      <div class="meta"><span class="pill ${esc((i.status||"").replace(" ","-"))}">${esc(i.status)}</span>${i.category?`<span class="tag">${esc(i.category)}</span>`:""}${dv?`<span>First ${fmt(i.first)}</span>`:`<span>${esc(dtxt)}</span>`}<span>Last ${fmt(i.last)}</span>${dv&&i.total>i.count?`<span>${i.total} reports across all districts</span>`:""}${i.owner?`<span>Owner: ${esc(i.owner)}</span>`:""}</div></div>
+    <div class="count"><b>${i.count}</b><span>${i.count===1?"report":"reports"}${dv?"":` · ${i.ds.length} dist.`}</span></div></div>`;
   if(isOpen)h+=`<div class="detail">
     <div class="detail-grid">
       <div><div class="dlab">Status</div>${esc(i.status)}</div><div><div class="dlab">Severity</div>${esc(i.severity)}</div>
       <div><div class="dlab">Category</div>${esc(i.category||"—")}</div><div><div class="dlab">Owner</div>${esc(i.owner||"—")}</div>
     </div>
     ${i.resolution?`<div><div class="dlab">Action taken / resolution</div><div style="white-space:pre-wrap">${esc(i.resolution)}</div></div>`:""}
-    <div><div style="font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:8px">${i.count} ${i.count===1?"report":"reports"} from ${i.ds.length} ${i.ds.length===1?"district":"districts"} · first ${fmt(i.first)}${ranged()&&i.total>i.count?` · ${i.total-i.count} more outside the selected dates`:""}</div>
+    <div><div style="font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:8px">${i.count} ${i.count===1?"report":"reports"} from ${dv?esc(i.dist||"no district"):`${i.ds.length} ${i.ds.length===1?"district":"districts"}`} · first ${fmt(i.first)}${!dv&&ranged()&&i.total>i.count?` · ${i.total-i.count} more outside the selected dates`:""}</div>
+    ${dv&&i.total>i.count?`<p class="shared">Status, owner and action taken apply to all districts reporting ${code(i)}.</p>`:""}
     <div class="reports">${i.reps.map(r=>`<div class="rep"><span class="d">${fmt(r.date)}</span><span class="dist">${esc(r.district)}<span class="who">${esc(r.reportedBy||"")}</span></span><span class="msg">${esc(r.message)}</span></div>`).join("")}</div></div>
   </div>`;
   return h;
@@ -175,6 +190,8 @@ function rowHTML(i){
 $("distF").innerHTML+=DISTRICTS.map(d=>`<option>${d}</option>`).join("");
 $("q").addEventListener("input",e=>{S.q=e.target.value;render()});
 $("catF").addEventListener("change",e=>{S.cat=e.target.value;render()});
+function syncView(){[...$("viewSeg").children].forEach(x=>x.setAttribute("aria-pressed",x.dataset.v===S.view))}syncView();
+$("viewSeg").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;S.view=b.dataset.v;S.open=null;try{localStorage.setItem("view",S.view)}catch{}syncView();render()});
 $("distF").addEventListener("change",e=>{S.dist=e.target.value;render()});
 $("statusSeg").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;S.status=b.dataset.s;[...$("statusSeg").children].forEach(x=>x.setAttribute("aria-pressed",x===b));render()});
 $("dists").addEventListener("click",e=>{const b=e.target.closest(".drow");if(!b)return;S.dist=S.dist===b.dataset.dist?"":b.dataset.dist;$("distF").value=S.dist;render()});
@@ -188,10 +205,13 @@ $("dTo").addEventListener("change",e=>setRange(S.from,e.target.value));
 $("days").addEventListener("click",e=>{const b=e.target.closest(".day");if(!b||b.classList.contains("zero"))return;const d=b.dataset.day;if(S.from===d&&S.to===d)setRange("","","all");else setRange(d,d,"day")});
 $("exportBtn").addEventListener("click",()=>{
   const q=v=>`"${String(v??"").replace(/"/g,'""')}"`;
-  const rows=[["Code","Issue","Category","Severity","Status","Owner","Reports","Districts affected","District names","First reported","Last reported","Action / resolution"]];
-  for(const i of enrich().filter(i=>i.status!=="Merged"&&(!ranged()||i.count)).sort((a,b)=>b.count-a.count))rows.push([code(i),i.title,i.category,i.severity,i.status,i.owner,i.count,i.ds.length,i.ds.join("; "),i.first,i.last,i.resolution]);
+  let rows;const live=enrich().filter(i=>i.status!=="Merged"&&(!ranged()||i.count));
+  if(S.view==="district"){rows=[["District","Code","Issue","Category","Severity","Status","Owner","Reports","First reported","Last reported","Action / resolution"]];
+    for(const u of live.flatMap(splitByDistrict).filter(u=>u.count).sort((a,b)=>(a.dist||"").localeCompare(b.dist||"")||b.count-a.count))rows.push([u.dist,code(u),u.title,u.category,u.severity,u.status,u.owner,u.count,u.first,u.last,u.resolution])}
+  else{rows=[["Code","Issue","Category","Severity","Status","Owner","Reports","Districts affected","District names","First reported","Last reported","Action / resolution"]];
+    for(const i of live.sort((a,b)=>b.count-a.count))rows.push([code(i),i.title,i.category,i.severity,i.status,i.owner,i.count,i.ds.length,i.ds.join("; "),i.first,i.last,i.resolution])}
   const blob=new Blob(["﻿"+rows.map(r=>r.map(q).join(",")).join("\r\n")],{type:"text/csv"});
-  const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=`spds-issues-${ranged()?(S.from||"start")+"_to_"+(S.to||today()):today()}.csv`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),2000);
+  const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=`spds-issues${S.view==="district"?"-by-district":""}-${ranged()?(S.from||"start")+"_to_"+(S.to||today()):today()}.csv`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),2000);
 });
 
 fetch("data.json?v="+Date.now()).then(r=>{if(!r.ok)throw new Error(r.status);return r.json()}).then(d=>{
